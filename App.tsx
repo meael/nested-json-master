@@ -1,37 +1,47 @@
-import React, { useState, useRef, useCallback } from 'react';
-import { UploadCloud, Save, FileJson, AlertTriangle, Info } from 'lucide-react';
-import JsonTreeView from './components/JsonTreeView';
+import React, { useState, useRef, useEffect } from 'react';
+import { UploadCloud, Save, FileJson, Info, Trash2, RefreshCw } from 'lucide-react';
+import JsonListView from './components/JsonListView';
 import EditorPanel from './components/EditorPanel';
-import { parsePathKey, addNestedValue, getJsonStats } from './utils/jsonLogic';
-import { FileStats, FileSystemFileHandle } from './types';
+import { parsePathKey, addNestedValue, flattenJson, calculateDiff, getJsonStats } from './utils/jsonLogic';
+import { FileStats, FileSystemFileHandle, DiffStats, FlatEntry } from './types';
 
 const App: React.FC = () => {
+  const [originalData, setOriginalData] = useState<any | null>(null);
   const [data, setData] = useState<any | null>(null);
+  const [flatItems, setFlatItems] = useState<FlatEntry[]>([]);
+  
   const [fileHandle, setFileHandle] = useState<FileSystemFileHandle | null>(null);
   const [fileName, setFileName] = useState<string | null>(null);
-  const [fileStats, setFileStats] = useState<FileStats | null>(null);
+  
+  const [diffStats, setDiffStats] = useState<DiffStats>({ added: 0, removed: 0, modified: 0 });
   const [error, setError] = useState<string | null>(null);
   const [successMsg, setSuccessMsg] = useState<string | null>(null);
-  const [highlightPath, setHighlightPath] = useState<string>('');
+  const [searchQuery, setSearchQuery] = useState('');
   
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  // Re-calculate flat list and stats whenever data changes
+  useEffect(() => {
+    if (data) {
+      setFlatItems(flattenJson(data));
+      if (originalData) {
+        setDiffStats(calculateDiff(originalData, data));
+      }
+    } else {
+      setFlatItems([]);
+      setDiffStats({ added: 0, removed: 0, modified: 0 });
+    }
+  }, [data, originalData]);
 
   // --- File Handling ---
 
   const handleFileLoad = async (content: string, name: string, handle: FileSystemFileHandle | null) => {
     try {
       const parsed = JSON.parse(content);
+      setOriginalData(JSON.parse(JSON.stringify(parsed))); // Deep copy for comparison
       setData(parsed);
       setFileName(name);
       setFileHandle(handle);
-      
-      const stats = getJsonStats(content);
-      setFileStats({
-        originalSize: stats.size,
-        currentSize: stats.size,
-        nodeCount: stats.count,
-        lastModified: Date.now()
-      });
       setError(null);
       setSuccessMsg("File loaded successfully.");
     } catch (e) {
@@ -40,20 +50,25 @@ const App: React.FC = () => {
   };
 
   const openFile = async () => {
-    if ('showOpenFilePicker' in window) {
-      try {
-        const [handle] = await (window as any).showOpenFilePicker({
-          types: [{ description: 'JSON Files', accept: { 'application/json': ['.json'] } }],
-        });
-        const file = await handle.getFile();
-        const content = await file.text();
-        handleFileLoad(content, file.name, handle);
-      } catch (err) {
-        // User cancelled or error
-        console.error(err);
-      }
-    } else {
-      // Fallback
+    try {
+        // Fix: Check for cross-origin iframe environment which blocks File System Access API
+        if (window.self !== window.top) {
+            throw new Error("Iframe context");
+        }
+        
+        if ('showOpenFilePicker' in window) {
+            const [handle] = await (window as any).showOpenFilePicker({
+            types: [{ description: 'JSON Files', accept: { 'application/json': ['.json'] } }],
+            });
+            const file = await handle.getFile();
+            const content = await file.text();
+            handleFileLoad(content, file.name, handle);
+        } else {
+            throw new Error("API not supported");
+        }
+    } catch (err) {
+      // Fallback for iframes or unsupported browsers
+      console.warn("File System API unavailable or blocked, falling back to input", err);
       fileInputRef.current?.click();
     }
   };
@@ -63,6 +78,8 @@ const App: React.FC = () => {
     if (!file) return;
     const content = await file.text();
     handleFileLoad(content, file.name, null);
+    // Reset value to allow re-uploading same file
+    e.target.value = '';
   };
 
   const saveFile = async () => {
@@ -70,11 +87,12 @@ const App: React.FC = () => {
 
     try {
       const content = JSON.stringify(data, null, 2);
-      const stats = getJsonStats(content);
-
+      
       // --- Safety Check: Size Validation ---
-      // We check if size dropped significantly without reason (simple heuristic)
-      if (fileStats && stats.size < fileStats.originalSize * 0.5) {
+      const stats = getJsonStats(content);
+      const originalStats = originalData ? getJsonStats(JSON.stringify(originalData)) : stats;
+
+      if (stats.size < originalStats.size * 0.5) {
         if (!confirm("Warning: The file size has decreased significantly (over 50%). Are you sure you haven't accidentally deleted data?")) {
             return;
         }
@@ -85,6 +103,8 @@ const App: React.FC = () => {
         await writable.write(content);
         await writable.close();
         setSuccessMsg("Saved directly to file system!");
+        // Update original data to current state after save
+        setOriginalData(JSON.parse(JSON.stringify(data)));
       } else {
         // Legacy download
         const blob = new Blob([content], { type: 'application/json' });
@@ -95,14 +115,8 @@ const App: React.FC = () => {
         a.click();
         URL.revokeObjectURL(url);
         setSuccessMsg("File downloaded.");
+        setOriginalData(JSON.parse(JSON.stringify(data)));
       }
-
-      // Update stats
-      setFileStats(prev => prev ? ({
-          ...prev,
-          currentSize: stats.size,
-          lastModified: Date.now()
-      }) : null);
 
     } catch (e) {
       setError("Failed to save file.");
@@ -126,7 +140,7 @@ const App: React.FC = () => {
         try {
           finalValue = JSON.parse(valueStr);
         } catch {
-          // Keep as string if parsing fails, or we could throw error if strict JSON required
+          // Keep as string
         }
       } else if (valueStr === 'true') finalValue = true;
       else if (valueStr === 'false') finalValue = false;
@@ -134,7 +148,7 @@ const App: React.FC = () => {
 
       const newData = addNestedValue(data, pathSegments, finalValue);
       setData(newData);
-      setSuccessMsg(`Successfully added key: ${pathSegments.join(' -> ')}`);
+      setSuccessMsg(`Added: ${pathSegments.join(' -> ')}`);
       setError(null);
     } catch (err: any) {
       setError(err.message);
@@ -143,7 +157,7 @@ const App: React.FC = () => {
   };
 
   const handleSearch = (query: string) => {
-    setHighlightPath(query);
+    setSearchQuery(query);
   };
 
   // --- Drag & Drop ---
@@ -151,16 +165,21 @@ const App: React.FC = () => {
       e.preventDefault();
       const item = e.dataTransfer.items[0];
       if (item.kind === 'file') {
-          // If browser supports getAsFileSystemHandle (modern Chrome/Edge)
-          if ('getAsFileSystemHandle' in item) {
-             const handle = await (item as any).getAsFileSystemHandle();
-             if (handle.kind === 'file') {
-                 const file = await handle.getFile();
-                 const text = await file.text();
-                 handleFileLoad(text, file.name, handle);
-                 return;
-             }
+          try {
+            // Check for modern API support first
+            if ('getAsFileSystemHandle' in item) {
+                const handle = await (item as any).getAsFileSystemHandle();
+                if (handle.kind === 'file') {
+                    const file = await handle.getFile();
+                    const text = await file.text();
+                    handleFileLoad(text, file.name, handle);
+                    return;
+                }
+            }
+          } catch(e) {
+             console.warn("Native FS handle access failed", e);
           }
+          
           // Fallback
           const file = item.getAsFile();
           if(file) {
@@ -172,32 +191,44 @@ const App: React.FC = () => {
 
   return (
     <div 
-        className="min-h-screen flex flex-col font-sans text-slate-800"
+        className="min-h-screen flex flex-col font-sans text-slate-800 bg-gray-50"
         onDragOver={(e) => e.preventDefault()}
         onDrop={handleDrop}
     >
       {/* Navbar */}
-      <header className="bg-white border-b border-gray-200 sticky top-0 z-10">
+      <header className="bg-white border-b border-gray-200 sticky top-0 z-30 shadow-sm">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between">
           <div className="flex items-center gap-3">
-            <div className="bg-indigo-600 p-2 rounded-lg text-white">
+            <div className="bg-indigo-600 p-2 rounded-lg text-white shadow-indigo-200 shadow-md">
               <FileJson size={24} />
             </div>
-            <h1 className="text-xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-indigo-600 to-purple-600">
-              Nested JSON Master
-            </h1>
+            <div>
+                <h1 className="text-xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-indigo-600 to-purple-600 tracking-tight">
+                Nested JSON Master
+                </h1>
+                {fileName && <p className="text-xs text-gray-400 font-medium">{fileName}</p>}
+            </div>
           </div>
           
           <div className="flex items-center gap-3">
-             {fileStats && (
-                <div className="hidden md:flex flex-col items-end mr-4 text-xs text-gray-500">
-                    <span>Size: {(fileStats.currentSize / 1024).toFixed(2)} KB</span>
-                    <span className={fileStats.currentSize !== fileStats.originalSize ? "text-amber-600 font-semibold" : ""}>
-                        Diff: {fileStats.currentSize - fileStats.originalSize > 0 ? '+' : ''}
-                        {fileStats.currentSize - fileStats.originalSize} B
+            {/* Diff Stats Pill */}
+            {data && (
+                <div className="hidden md:flex items-center bg-gray-100 rounded-full px-4 py-1.5 border border-gray-200 gap-4 text-xs font-semibold mr-4">
+                    <span className="text-emerald-600 flex items-center gap-1">
+                        <span className="w-2 h-2 rounded-full bg-emerald-500"></span>
+                        +{diffStats.added} Added
+                    </span>
+                    <span className="text-amber-600 flex items-center gap-1">
+                        <span className="w-2 h-2 rounded-full bg-amber-500"></span>
+                        ~{diffStats.modified} Modified
+                    </span>
+                    <span className="text-red-500 flex items-center gap-1">
+                        <span className="w-2 h-2 rounded-full bg-red-500"></span>
+                        -{diffStats.removed} Removed
                     </span>
                 </div>
-             )}
+            )}
+
             <input 
               type="file" 
               ref={fileInputRef} 
@@ -205,59 +236,59 @@ const App: React.FC = () => {
               className="hidden" 
               accept=".json"
             />
+            
             <button 
               onClick={openFile}
-              className="flex items-center gap-2 px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 transition"
+              className="flex items-center gap-2 px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 hover:shadow-sm transition"
             >
               <UploadCloud size={18} />
-              Open JSON
+              Open
             </button>
             <button 
               onClick={saveFile}
               disabled={!data}
-              className="flex items-center gap-2 px-4 py-2 text-sm font-medium text-white bg-slate-900 rounded-lg hover:bg-slate-800 transition disabled:opacity-50 disabled:cursor-not-allowed"
+              className="flex items-center gap-2 px-4 py-2 text-sm font-medium text-white bg-slate-900 rounded-lg hover:bg-slate-800 hover:shadow-lg hover:shadow-slate-200 transition disabled:opacity-50 disabled:cursor-not-allowed"
             >
               <Save size={18} />
-              Save Changes
+              Save
             </button>
           </div>
         </div>
       </header>
 
       {/* Main Content */}
-      <main className="flex-1 max-w-7xl w-full mx-auto p-4 sm:p-6 lg:p-8">
+      <main className="flex-1 max-w-5xl w-full mx-auto p-4 sm:p-6 lg:p-8">
         {!data ? (
-          <div className="h-[60vh] flex flex-col items-center justify-center border-2 border-dashed border-gray-300 rounded-2xl bg-gray-50 text-gray-400">
-            <UploadCloud size={64} className="mb-4 text-gray-300" />
-            <p className="text-lg font-medium text-gray-500">Drag & drop a JSON file here</p>
-            <p className="text-sm mt-2">or click "Open JSON" to get started</p>
+          <div className="h-[60vh] flex flex-col items-center justify-center border-2 border-dashed border-indigo-200 rounded-2xl bg-indigo-50/30 text-indigo-400">
+            <div className="bg-white p-6 rounded-full shadow-lg mb-6">
+                <UploadCloud size={48} className="text-indigo-500" />
+            </div>
+            <p className="text-xl font-semibold text-slate-700">Drag & drop a JSON file here</p>
+            <p className="text-sm mt-2 text-slate-500">or click "Open" to start editing</p>
           </div>
         ) : (
-          <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 h-[calc(100vh-8rem)]">
-            
-            {/* Left: JSON Viewer */}
-            <div className="lg:col-span-2 bg-white rounded-xl shadow-sm border border-gray-200 flex flex-col overflow-hidden">
-               <div className="p-3 bg-gray-50 border-b border-gray-100 flex justify-between items-center">
-                  <span className="text-sm font-semibold text-gray-600 flex items-center gap-2">
-                    <Info size={14}/> {fileName}
-                  </span>
-                  <span className="text-xs px-2 py-1 bg-gray-200 rounded text-gray-600">Read/Write</span>
-               </div>
-               <div className="flex-1 overflow-auto p-4">
-                  <JsonTreeView data={data} name="root" isRoot={true} highlightPath={highlightPath} />
-               </div>
-            </div>
-
-            {/* Right: Tools */}
-            <div className="lg:col-span-1 h-full">
-               <EditorPanel 
+          <div className="flex flex-col gap-6">
+             
+             <EditorPanel 
                  onAddKey={handleAddKey} 
                  onSearch={handleSearch}
                  lastError={error}
                  lastSuccess={successMsg}
-               />
-            </div>
-            
+             />
+
+             {/* List Header */}
+             <div className="flex items-center justify-between px-2">
+                 <h2 className="text-lg font-bold text-slate-800 flex items-center gap-2">
+                    <Info size={18} className="text-indigo-500"/>
+                    Structure Content
+                    <span className="bg-gray-200 text-gray-600 text-xs py-0.5 px-2 rounded-full">
+                        {flatItems.length} Keys
+                    </span>
+                 </h2>
+             </div>
+
+             <JsonListView items={flatItems} searchQuery={searchQuery} />
+
           </div>
         )}
       </main>

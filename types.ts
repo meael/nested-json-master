@@ -9,13 +9,20 @@ export interface FileStats {
   lastModified: number;
 }
 
-export type PathSegment = string;
-
-export interface SearchResult {
-  path: string;
-  value: any;
-  isKeyMatch: boolean;
+export interface DiffStats {
+  added: number;
+  removed: number;
+  modified: number;
 }
+
+export interface FlatEntry {
+  id: string; // unique identifier for rendering
+  path: string;
+  keys: string[];
+  value: any;
+}
+
+export type PathSegment = string;
 
 // Browser File System Access API types
 export interface FileSystemFileHandle {

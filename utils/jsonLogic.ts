@@ -1,4 +1,4 @@
-import { JsonNode, PathSegment, SearchResult } from '../types';
+import { JsonNode, PathSegment, FlatEntry, DiffStats } from '../types';
 
 /**
  * Parses a string like "banking:taxPaymentF24->backToSectionName"
@@ -8,24 +8,6 @@ export const parsePathKey = (pathKey: string): PathSegment[] => {
   if (!pathKey) return [];
   // Split by ':' or '->'
   return pathKey.split(/(?:->|:)/).filter(Boolean);
-};
-
-/**
- * Checks if a key path already exists in the object
- */
-export const checkKeyExists = (data: JsonNode, pathSegments: PathSegment[]): boolean => {
-  let current = data;
-  for (let i = 0; i < pathSegments.length; i++) {
-    const key = pathSegments[i];
-    if (current === null || typeof current !== 'object') {
-      return false;
-    }
-    if (!(key in current)) {
-      return false;
-    }
-    current = current[key];
-  }
-  return true;
 };
 
 /**
@@ -68,47 +50,47 @@ export const addNestedValue = (
 };
 
 /**
- * Searches the JSON tree for keys matching the parsed path logic or raw values.
+ * Flattens a nested JSON object into a list of entries with paths.
+ * Uses "->" as the default separator for display.
  */
-export const searchJson = (data: JsonNode, query: string): SearchResult[] => {
-  const results: SearchResult[] = [];
-  const normalizedQuery = query.toLowerCase();
+export const flattenJson = (data: any): FlatEntry[] => {
+  const result: FlatEntry[] = [];
   
-  // Helper for recursion
-  const traverse = (node: any, currentPath: string[]) => {
-    if (node && typeof node === 'object') {
-      Object.keys(node).forEach(key => {
-        const newPath = [...currentPath, key];
-        const pathString = newPath.join('->');
-        
-        // Check if the constructed path matches the query logic
-        // We simulate the user's input style (e.g., checking if "banking:tax" is in path)
-        const pathMatch = pathString.toLowerCase().includes(normalizedQuery.replace(/:/g, '->'));
-        
-        if (pathMatch) {
-            results.push({
-                path: pathString,
-                value: node[key],
-                isKeyMatch: true
-            });
-        }
-
-        traverse(node[key], newPath);
-      });
+  const traverse = (node: any, currentKeys: string[]) => {
+    if (node && typeof node === 'object' && !Array.isArray(node)) {
+      const keys = Object.keys(node);
+      if (keys.length === 0) {
+        // Empty object
+        result.push({
+          id: currentKeys.join('|'),
+          path: currentKeys.join('->'),
+          keys: currentKeys,
+          value: {}
+        });
+      } else {
+        keys.forEach(key => {
+          traverse(node[key], [...currentKeys, key]);
+        });
+      }
     } else {
-        // Leaf node value check
-        if (String(node).toLowerCase().includes(normalizedQuery)) {
-             results.push({
-                path: currentPath.join('->'),
-                value: node,
-                isKeyMatch: false
-            });
-        }
+      // Leaf node (primitive or array)
+      // Note: We treat arrays as values for this specific use case to avoid exploding arrays into thousands of lines
+      // unless specifically requested. For "config" editing, arrays are often treated as atomic values or need special handling.
+      // However, to follow the "edit nested JSON" prompt strictly, if it's an array of objects, we might want to recurse.
+      // For simplicity and typical use cases (banking codes, translations), we treat the primitive value as the leaf.
+      result.push({
+        id: currentKeys.join('|'),
+        path: currentKeys.join('->'),
+        keys: currentKeys,
+        value: node
+      });
     }
   };
 
-  traverse(data, []);
-  return results;
+  if (data) {
+    traverse(data, []);
+  }
+  return result;
 };
 
 /**
@@ -120,3 +102,36 @@ export const getJsonStats = (jsonStr: string) => {
         count: (jsonStr.match(/"/g) || []).length / 2 // Approximation of keys+strings
     }
 }
+
+/**
+ * Compares two JSON objects and returns diff stats.
+ */
+export const calculateDiff = (original: any, current: any): DiffStats => {
+  const flatOrg = flattenJson(original);
+  const flatCurr = flattenJson(current);
+  
+  const orgMap = new Map(flatOrg.map(i => [i.path, JSON.stringify(i.value)]));
+  const currMap = new Map(flatCurr.map(i => [i.path, JSON.stringify(i.value)]));
+
+  let added = 0;
+  let modified = 0;
+  let removed = 0;
+
+  // Check for added and modified
+  currMap.forEach((val, key) => {
+    if (!orgMap.has(key)) {
+      added++;
+    } else if (orgMap.get(key) !== val) {
+      modified++;
+    }
+  });
+
+  // Check for removed
+  orgMap.forEach((_, key) => {
+    if (!currMap.has(key)) {
+      removed++;
+    }
+  });
+
+  return { added, modified, removed };
+};
