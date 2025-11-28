@@ -1,0 +1,5 @@
+{
+  "name": "Nested JSON Master",
+  "description": "A professional tool for editing deeply nested JSON structures using custom path syntax and File System Access API.",
+  "requestFramePermissions": []
+}
