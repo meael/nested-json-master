@@ -1,9 +1,15 @@
-import React, { useState, useRef, useEffect } from 'react';
-import { UploadCloud, Save, FileJson, Info, Trash2, RefreshCw } from 'lucide-react';
+
+import React, { useState, useRef, useEffect, useCallback } from 'react';
+import { UploadCloud, Save, FileJson, Info, RefreshCw, FileText, AlertOctagon, RotateCcw, Copy, Pencil, X, CheckCircle2 } from 'lucide-react';
 import JsonListView from './components/JsonListView';
 import EditorPanel from './components/EditorPanel';
-import { parsePathKey, addNestedValue, flattenJson, calculateDiff, getJsonStats } from './utils/jsonLogic';
-import { FileStats, FileSystemFileHandle, DiffStats, FlatEntry } from './types';
+import AddKeyModal from './components/AddKeyModal';
+import Toast from './components/Toast';
+import { getJsonStats } from './utils/jsonLogic';
+import { FileSystemFileHandle, DiffStats, FlatEntry } from './types';
+import { DEMO_DATA } from './demoData';
+import { createWorker } from './utils/worker';
+import { parsePath, formatPath } from './utils/pathFormat';
 
 const App: React.FC = () => {
   const [originalData, setOriginalData] = useState<any | null>(null);
@@ -14,47 +20,136 @@ const App: React.FC = () => {
   const [fileName, setFileName] = useState<string | null>(null);
   
   const [diffStats, setDiffStats] = useState<DiffStats>({ added: 0, removed: 0, modified: 0 });
-  const [error, setError] = useState<string | null>(null);
-  const [successMsg, setSuccessMsg] = useState<string | null>(null);
+  const [unsavedPaths, setUnsavedPaths] = useState<Set<string>>(new Set());
+  
+  // Post-Save state
+  const [isSavedState, setIsSavedState] = useState(false);
+  const [savedItemsSnapshot, setSavedItemsSnapshot] = useState<FlatEntry[]>([]);
+
+  // Modal State
+  const [isModalOpen, setIsModalOpen] = useState(false);
+  const [editingItem, setEditingItem] = useState<{ path: string, value: any } | null>(null);
+  const [addKeyError, setAddKeyError] = useState<string | null>(null);
+  
+  // Toast state
+  const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
+  
   const [searchQuery, setSearchQuery] = useState('');
+  const [isProcessing, setIsProcessing] = useState(false);
   
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const workerRef = useRef<Worker | null>(null);
 
-  // Re-calculate flat list and stats whenever data changes
+  // Init Worker
+  useEffect(() => {
+    workerRef.current = createWorker();
+    
+    workerRef.current.onmessage = (e) => {
+      const { type, result, error, id } = e.data;
+      
+      setIsProcessing(false);
+
+      if (type === 'ERROR') {
+        if (id === 'addValue') {
+            // Pass error to modal instead of toast
+            setAddKeyError(error);
+        } else {
+            setToast({ message: error, type: 'error' });
+        }
+        return;
+      }
+
+      switch (id) {
+        case 'flatten':
+          setFlatItems(result);
+          break;
+        case 'diff':
+          setDiffStats(result);
+          break;
+        case 'parse':
+          handleParsedData(result.data, result.name, result.handle);
+          break;
+        case 'addValue':
+          // Result contains { data, addedPath, addedValue }
+          setData(result.data);
+          // Only update unsaved paths if successful
+          const newPathStr = formatPath(result.addedPath);
+          setUnsavedPaths(prev => {
+            const next = new Set(prev);
+            next.add(newPathStr);
+            return next;
+          });
+          // Clear any errors and close modal
+          setAddKeyError(null);
+          setIsModalOpen(false);
+          setEditingItem(null);
+          // If we were in "Saved" state, modifying data breaks that state
+          setIsSavedState(false); 
+          break;
+      }
+    };
+
+    return () => {
+      workerRef.current?.terminate();
+    };
+  }, []);
+
+  const postWorkerMessage = useCallback((type: string, payload: any, id: string) => {
+    setIsProcessing(true);
+    workerRef.current?.postMessage({ type, payload, id });
+  }, []);
+
+  // Update Derived State via Worker
   useEffect(() => {
     if (data) {
-      setFlatItems(flattenJson(data));
+      postWorkerMessage('FLATTEN', data, 'flatten');
       if (originalData) {
-        setDiffStats(calculateDiff(originalData, data));
+        postWorkerMessage('DIFF', { original: originalData, current: data }, 'diff');
       }
     } else {
       setFlatItems([]);
       setDiffStats({ added: 0, removed: 0, modified: 0 });
     }
-  }, [data, originalData]);
+  }, [data, originalData, postWorkerMessage]);
 
-  // --- File Handling ---
+  const handleParsedData = (parsed: any, name: string, handle: any) => {
+    setOriginalData(JSON.parse(JSON.stringify(parsed)));
+    setData(parsed);
+    setFileName(name);
+    setFileHandle(handle);
+    setUnsavedPaths(new Set());
+    setIsSavedState(false);
+    setSavedItemsSnapshot([]);
+    setToast({ message: 'File loaded successfully', type: 'success' });
+  };
 
   const handleFileLoad = async (content: string, name: string, handle: FileSystemFileHandle | null) => {
     try {
-      const parsed = JSON.parse(content);
-      setOriginalData(JSON.parse(JSON.stringify(parsed))); // Deep copy for comparison
-      setData(parsed);
-      setFileName(name);
-      setFileHandle(handle);
-      setError(null);
-      setSuccessMsg("File loaded successfully.");
+        postWorkerMessage('PARSE', content, 'parse');
     } catch (e) {
-      setError("Invalid JSON file. Please check the syntax.");
+      setToast({ message: 'Invalid JSON file', type: 'error' });
+    }
+  };
+
+  const loadDemoData = () => {
+    try {
+        const parsed = DEMO_DATA;
+        setOriginalData(JSON.parse(JSON.stringify(parsed)));
+        setData(parsed);
+        setFileName("demo_localization.json");
+        setFileHandle(null);
+        setUnsavedPaths(new Set());
+        setIsSavedState(false);
+        setSavedItemsSnapshot([]);
+        setToast({ message: 'Demo data loaded successfully', type: 'success' });
+    } catch (e) {
+        setToast({ message: 'Failed to load demo data', type: 'error' });
     }
   };
 
   const openFile = async () => {
     try {
-        // Fix: Check for cross-origin iframe environment which blocks File System Access API
-        if (window.self !== window.top) {
-            throw new Error("Iframe context");
-        }
+        if (window.self !== window.top) throw new Error("Iframe context");
         
         if ('showOpenFilePicker' in window) {
             const [handle] = await (window as any).showOpenFilePicker({
@@ -67,8 +162,6 @@ const App: React.FC = () => {
             throw new Error("API not supported");
         }
     } catch (err) {
-      // Fallback for iframes or unsupported browsers
-      console.warn("File System API unavailable or blocked, falling back to input", err);
       fileInputRef.current?.click();
     }
   };
@@ -78,7 +171,6 @@ const App: React.FC = () => {
     if (!file) return;
     const content = await file.text();
     handleFileLoad(content, file.name, null);
-    // Reset value to allow re-uploading same file
     e.target.value = '';
   };
 
@@ -88,7 +180,6 @@ const App: React.FC = () => {
     try {
       const content = JSON.stringify(data, null, 2);
       
-      // --- Safety Check: Size Validation ---
       const stats = getJsonStats(content);
       const originalStats = originalData ? getJsonStats(JSON.stringify(originalData)) : stats;
 
@@ -102,11 +193,7 @@ const App: React.FC = () => {
         const writable = await fileHandle.createWritable();
         await writable.write(content);
         await writable.close();
-        setSuccessMsg("Saved directly to file system!");
-        // Update original data to current state after save
-        setOriginalData(JSON.parse(JSON.stringify(data)));
       } else {
-        // Legacy download
         const blob = new Blob([content], { type: 'application/json' });
         const url = URL.createObjectURL(blob);
         const a = document.createElement('a');
@@ -114,90 +201,123 @@ const App: React.FC = () => {
         a.download = fileName || 'edited_data.json';
         a.click();
         URL.revokeObjectURL(url);
-        setSuccessMsg("File downloaded.");
-        setOriginalData(JSON.parse(JSON.stringify(data)));
       }
 
+      // Success Logic
+      setToast({ message: 'File saved successfully!', type: 'success' });
+      setOriginalData(JSON.parse(JSON.stringify(data)));
+      
+      // Transition to Saved State
+      // We snapshot the current unsaved items to keep displaying them in the gray block
+      const currentPendingItems = flatItems.filter(item => unsavedPaths.has(item.path));
+      setSavedItemsSnapshot(currentPendingItems);
+      setIsSavedState(true);
+      setUnsavedPaths(new Set()); // Clear active unsaved paths tracking
+
     } catch (e) {
-      setError("Failed to save file.");
+      setToast({ message: 'Failed to save file', type: 'error' });
     }
   };
 
-  // --- Logic Integration ---
-
-  const handleAddKey = (pathStr: string, valueStr: string) => {
+  const handleAddKey = (pathStr: string, valueStr: string, allowOverwrite: boolean) => {
     if (!data) {
-      setError("Please load a JSON file first.");
+      setToast({ message: 'Please load a JSON file first', type: 'error' });
       return;
     }
 
     try {
-      const pathSegments = parsePathKey(pathStr);
-      
+      setAddKeyError(null); // Clear previous errors
       // Auto-detect value type
       let finalValue: any = valueStr;
       if (valueStr.startsWith('{') || valueStr.startsWith('[')) {
-        try {
-          finalValue = JSON.parse(valueStr);
-        } catch {
-          // Keep as string
-        }
+        try { finalValue = JSON.parse(valueStr); } catch {}
       } else if (valueStr === 'true') finalValue = true;
       else if (valueStr === 'false') finalValue = false;
       else if (!isNaN(Number(valueStr)) && valueStr.trim() !== '') finalValue = Number(valueStr);
 
-      const newData = addNestedValue(data, pathSegments, finalValue);
-      setData(newData);
-      setSuccessMsg(`Added: ${pathSegments.join(' -> ')}`);
-      setError(null);
+      const pathSegments = parsePath(pathStr);
+      
+      // Dispatch to worker
+      postWorkerMessage('ADD_VALUE', { 
+          data, 
+          path: pathSegments, 
+          value: finalValue,
+          allowOverwrite: allowOverwrite
+      }, 'addValue');
+
     } catch (err: any) {
-      setError(err.message);
-      setSuccessMsg(null);
+      setAddKeyError(err.message);
     }
   };
 
-  const handleSearch = (query: string) => {
-    setSearchQuery(query);
-  };
-
-  // --- Drag & Drop ---
-  const handleDrop = async (e: React.DragEvent) => {
-      e.preventDefault();
-      const item = e.dataTransfer.items[0];
-      if (item.kind === 'file') {
-          try {
-            // Check for modern API support first
-            if ('getAsFileSystemHandle' in item) {
-                const handle = await (item as any).getAsFileSystemHandle();
-                if (handle.kind === 'file') {
-                    const file = await handle.getFile();
-                    const text = await file.text();
-                    handleFileLoad(text, file.name, handle);
-                    return;
-                }
-            }
-          } catch(e) {
-             console.warn("Native FS handle access failed", e);
-          }
-          
-          // Fallback
-          const file = item.getAsFile();
-          if(file) {
-              const text = await file.text();
-              handleFileLoad(text, file.name, null);
-          }
+  const handleResetChanges = () => {
+      if(!originalData) return;
+      if(confirm("Are you sure you want to discard all pending changes?")) {
+          setData(JSON.parse(JSON.stringify(originalData)));
+          setUnsavedPaths(new Set());
+          setIsSavedState(false);
+          setSavedItemsSnapshot([]);
+          setToast({ message: 'Changes discarded', type: 'success' });
       }
   };
+
+  const handleCopyPendingKeys = (itemsToCopy: FlatEntry[]) => {
+      const text = itemsToCopy.map(i => i.path).join('\n');
+      navigator.clipboard.writeText(text);
+      setToast({ message: 'Keys copied to clipboard', type: 'success' });
+  };
+
+  const handleEditPending = (item: FlatEntry) => {
+      setEditingItem({ path: item.path, value: item.value });
+      setAddKeyError(null);
+      setIsModalOpen(true);
+  };
+
+  const handleDismissSavedState = () => {
+      setIsSavedState(false);
+      setSavedItemsSnapshot([]);
+  };
+
+  const openAddModal = () => {
+      setEditingItem(null);
+      setAddKeyError(null);
+      setIsModalOpen(true);
+  };
+
+  // Determine items to show in the top block
+  // If saved state, show snapshot. If normal state, show items derived from unsavedPaths
+  const pendingBlockItems = isSavedState 
+    ? savedItemsSnapshot 
+    : flatItems.filter(item => unsavedPaths.has(item.path));
+
+  const showPendingBlock = pendingBlockItems.length > 0;
 
   return (
     <div 
         className="min-h-screen flex flex-col font-sans text-slate-800 bg-gray-50"
         onDragOver={(e) => e.preventDefault()}
-        onDrop={handleDrop}
+        onDrop={(e) => {
+            e.preventDefault();
+        }}
     >
+      {/* Toast Notification */}
+      {toast && <Toast message={toast.message} type={toast.type} onClose={() => setToast(null)} />}
+
+      {/* Add/Edit Key Modal */}
+      <AddKeyModal 
+        isOpen={isModalOpen}
+        onClose={() => setIsModalOpen(false)}
+        onAdd={handleAddKey}
+        isProcessing={isProcessing}
+        externalError={addKeyError}
+        initialPath={editingItem?.path}
+        initialValue={editingItem?.value}
+        mode={editingItem ? 'edit' : 'add'}
+      />
+
       {/* Navbar */}
       <header className="bg-white border-b border-gray-200 sticky top-0 z-30 shadow-sm">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between">
+        <div className="layout-container px-4 sm:px-6 h-16 flex items-center justify-between">
           <div className="flex items-center gap-3">
             <div className="bg-indigo-600 p-2 rounded-lg text-white shadow-indigo-200 shadow-md">
               <FileJson size={24} />
@@ -211,24 +331,6 @@ const App: React.FC = () => {
           </div>
           
           <div className="flex items-center gap-3">
-            {/* Diff Stats Pill */}
-            {data && (
-                <div className="hidden md:flex items-center bg-gray-100 rounded-full px-4 py-1.5 border border-gray-200 gap-4 text-xs font-semibold mr-4">
-                    <span className="text-emerald-600 flex items-center gap-1">
-                        <span className="w-2 h-2 rounded-full bg-emerald-500"></span>
-                        +{diffStats.added} Added
-                    </span>
-                    <span className="text-amber-600 flex items-center gap-1">
-                        <span className="w-2 h-2 rounded-full bg-amber-500"></span>
-                        ~{diffStats.modified} Modified
-                    </span>
-                    <span className="text-red-500 flex items-center gap-1">
-                        <span className="w-2 h-2 rounded-full bg-red-500"></span>
-                        -{diffStats.removed} Removed
-                    </span>
-                </div>
-            )}
-
             <input 
               type="file" 
               ref={fileInputRef} 
@@ -238,46 +340,163 @@ const App: React.FC = () => {
             />
             
             <button 
+              onClick={loadDemoData}
+              className="hidden sm:flex items-center gap-2 px-4 py-2 text-sm font-medium text-indigo-700 bg-indigo-50 border border-indigo-100 rounded-lg hover:bg-indigo-100 transition"
+            >
+              <FileText size={18} />
+              Demo
+            </button>
+
+            <button 
               onClick={openFile}
               className="flex items-center gap-2 px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 hover:shadow-sm transition"
             >
               <UploadCloud size={18} />
               Open
             </button>
-            <button 
-              onClick={saveFile}
-              disabled={!data}
-              className="flex items-center gap-2 px-4 py-2 text-sm font-medium text-white bg-slate-900 rounded-lg hover:bg-slate-800 hover:shadow-lg hover:shadow-slate-200 transition disabled:opacity-50 disabled:cursor-not-allowed"
-            >
-              <Save size={18} />
-              Save
-            </button>
           </div>
         </div>
       </header>
 
       {/* Main Content */}
-      <main className="flex-1 max-w-5xl w-full mx-auto p-4 sm:p-6 lg:p-8">
+      <main className="flex-1 layout-container px-4 sm:px-6 py-6">
         {!data ? (
-          <div className="h-[60vh] flex flex-col items-center justify-center border-2 border-dashed border-indigo-200 rounded-2xl bg-indigo-50/30 text-indigo-400">
+          <div className="h-[60vh] flex flex-col items-center justify-center border-2 border-dashed border-indigo-200 rounded-2xl bg-indigo-50/30 text-indigo-400 mt-8">
             <div className="bg-white p-6 rounded-full shadow-lg mb-6">
                 <UploadCloud size={48} className="text-indigo-500" />
             </div>
             <p className="text-xl font-semibold text-slate-700">Drag & drop a JSON file here</p>
-            <p className="text-sm mt-2 text-slate-500">or click "Open" to start editing</p>
+            <p className="text-sm mt-2 text-slate-500 mb-6">or open a file to start editing</p>
+            
+            <button 
+              onClick={loadDemoData}
+              className="flex items-center gap-2 px-6 py-3 text-sm font-bold text-white bg-indigo-600 rounded-full hover:bg-indigo-700 shadow-md hover:shadow-xl transition transform hover:-translate-y-0.5"
+            >
+              <FileText size={18} />
+              Load Demo Data
+            </button>
           </div>
         ) : (
           <div className="flex flex-col gap-6">
              
              <EditorPanel 
-                 onAddKey={handleAddKey} 
-                 onSearch={handleSearch}
-                 lastError={error}
-                 lastSuccess={successMsg}
+                 onOpenAddModal={openAddModal}
+                 onSearch={(q) => setSearchQuery(q)}
              />
 
-             {/* List Header */}
-             <div className="flex items-center justify-between px-2">
+             {/* Pending Changes / Saved Changes Block */}
+             {showPendingBlock && (
+                <div className={`border rounded-xl shadow-sm overflow-hidden mb-2 animate-fade-in-up ${
+                    isSavedState ? 'bg-gray-50 border-gray-300' : 'bg-white border-emerald-200'
+                }`}>
+                    <div className={`px-4 py-4 border-b flex flex-col sm:flex-row items-center justify-between gap-4 ${
+                        isSavedState ? 'bg-gray-100 border-gray-200' : 'bg-emerald-50 border-emerald-100'
+                    }`}>
+                        <div className="flex items-center gap-4 w-full sm:w-auto justify-between sm:justify-start">
+                             <div className="flex items-center gap-2">
+                                <span className={`flex h-8 w-8 items-center justify-center rounded-lg shadow-sm ring-1 ${
+                                    isSavedState ? 'bg-white text-gray-500 ring-gray-200' : 'bg-white text-emerald-600 ring-emerald-200'
+                                }`}>
+                                  {isSavedState ? <CheckCircle2 size={18} /> : <AlertOctagon size={18} />}
+                                </span>
+                                <div>
+                                    <h3 className={`text-sm font-bold ${isSavedState ? 'text-gray-700' : 'text-slate-800'}`}>
+                                        {isSavedState ? 'Changes Saved' : 'Pending Changes'}
+                                    </h3>
+                                    <p className="text-xs text-slate-500">{pendingBlockItems.length} items</p>
+                                </div>
+                             </div>
+                             
+                             {!isSavedState && (
+                                 <div className="flex items-center gap-3 bg-white px-3 py-1.5 rounded-md border border-emerald-100 shadow-sm text-xs font-semibold">
+                                    <span className="text-emerald-600">+{diffStats.added}</span>
+                                    <span className="text-amber-600">~{diffStats.modified}</span>
+                                    <span className="text-red-500">-{diffStats.removed}</span>
+                                 </div>
+                             )}
+                        </div>
+
+                        <div className="flex items-center gap-2 w-full sm:w-auto">
+                            <button 
+                                onClick={() => handleCopyPendingKeys(pendingBlockItems)}
+                                className={`flex items-center justify-center gap-2 px-3 py-2.5 text-sm font-medium border rounded-lg transition ${
+                                    isSavedState 
+                                    ? 'text-gray-700 bg-white border-gray-300 hover:bg-gray-50' 
+                                    : 'text-emerald-700 bg-emerald-50 hover:bg-emerald-100 border-emerald-200'
+                                }`}
+                                title="Copy new keys to clipboard"
+                            >
+                                <Copy size={16} />
+                                <span className="hidden sm:inline">Copy Keys</span>
+                            </button>
+
+                            {isSavedState ? (
+                                <button
+                                    onClick={handleDismissSavedState}
+                                    className="p-2.5 text-gray-500 hover:text-gray-700 hover:bg-gray-200 rounded-lg transition border border-transparent hover:border-gray-300"
+                                    title="Close"
+                                >
+                                    <X size={20} />
+                                </button>
+                            ) : (
+                                <>
+                                    <button 
+                                        onClick={handleResetChanges}
+                                        className="flex items-center justify-center gap-2 px-3 py-2.5 text-sm font-medium text-red-600 bg-white border border-red-200 hover:bg-red-50 rounded-lg transition"
+                                        title="Discard all changes"
+                                    >
+                                        <RotateCcw size={16} />
+                                        <span className="hidden sm:inline">Reset</span>
+                                    </button>
+
+                                    <button 
+                                        onClick={saveFile}
+                                        className="flex items-center justify-center gap-2 px-6 py-2.5 text-sm font-bold text-white bg-emerald-600 rounded-lg hover:bg-emerald-700 shadow-sm hover:shadow-md transition active:scale-95 flex-1 sm:flex-none"
+                                    >
+                                        <Save size={18} />
+                                        Save
+                                    </button>
+                                </>
+                            )}
+                        </div>
+                    </div>
+                    
+                    {/* List of items */}
+                    <div className={`p-0 overflow-y-auto border-t max-h-60 ${
+                        isSavedState ? 'bg-gray-50 border-gray-200' : 'bg-emerald-50/20 border-emerald-50'
+                    }`}>
+                        {pendingBlockItems.map((item) => (
+                            <div key={item.id} className="flex items-center justify-between p-3 border-b border-gray-100 last:border-0 hover:bg-black/5 transition">
+                                <div className="flex-1 min-w-0 mr-4">
+                                    <div className="text-xs font-mono font-bold text-slate-700 truncate">{item.path}</div>
+                                    <div 
+                                        className="text-sm text-slate-600 mt-0.5" 
+                                        title={String(item.value)}
+                                        style={{ 
+                                            wordBreak: 'break-word',
+                                            whiteSpace: 'pre-wrap'
+                                        }}
+                                    >
+                                        {typeof item.value === 'object' ? JSON.stringify(item.value) : String(item.value)}
+                                    </div>
+                                </div>
+                                {!isSavedState && (
+                                    <button 
+                                        onClick={() => handleEditPending(item)}
+                                        className="p-1.5 text-gray-400 hover:text-indigo-600 hover:bg-indigo-50 rounded transition"
+                                        title="Edit"
+                                    >
+                                        <Pencil size={14} />
+                                    </button>
+                                )}
+                            </div>
+                        ))}
+                    </div>
+                </div>
+             )}
+
+             {/* Main List Header */}
+             <div className="flex items-center justify-between px-2 pt-2">
                  <h2 className="text-lg font-bold text-slate-800 flex items-center gap-2">
                     <Info size={18} className="text-indigo-500"/>
                     Structure Content
@@ -285,9 +504,10 @@ const App: React.FC = () => {
                         {flatItems.length} Keys
                     </span>
                  </h2>
+                 {isProcessing && <RefreshCw size={16} className="animate-spin text-indigo-500"/>}
              </div>
 
-             <JsonListView items={flatItems} searchQuery={searchQuery} />
+             <JsonListView items={flatItems} searchQuery={searchQuery} highlightPaths={unsavedPaths} />
 
           </div>
         )}

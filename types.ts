@@ -20,6 +20,7 @@ export interface FlatEntry {
   path: string;
   keys: string[];
   value: any;
+  isNew?: boolean;
 }
 
 export type PathSegment = string;
