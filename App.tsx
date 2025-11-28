@@ -125,7 +125,7 @@ const App: React.FC = () => {
 
   const handleFileLoad = async (content: string, name: string, handle: FileSystemFileHandle | null) => {
     try {
-        postWorkerMessage('PARSE', content, 'parse');
+        postWorkerMessage('PARSE', { content, name, handle }, 'parse');
     } catch (e) {
       setToast({ message: 'Invalid JSON file', type: 'error' });
     }

@@ -16,7 +16,11 @@ const workerCode = `
           result = calculateDiff(payload.original, payload.current);
           break;
         case 'PARSE':
-          result = JSON.parse(payload);
+          result = {
+            data: JSON.parse(payload.content),
+            name: payload.name,
+            handle: payload.handle
+          };
           break;
         case 'ADD_VALUE':
           // We return the payload metadata back so the main thread knows what was added
