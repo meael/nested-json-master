@@ -17,10 +17,13 @@ const workerCode = `
           break;
         case 'PARSE':
           result = {
-            data: JSON.parse(payload.content),
+            data: parseToMap(payload.content),
             name: payload.name,
             handle: payload.handle
           };
+          break;
+        case 'STRINGIFY':
+          result = stringifyMap(payload);
           break;
         case 'ADD_VALUE':
           // We return the payload metadata back so the main thread knows what was added
@@ -43,7 +46,21 @@ const workerCode = `
   function flattenJson(data) {
     const result = [];
     const traverse = (node, currentKeys) => {
-      if (node && typeof node === 'object' && !Array.isArray(node)) {
+      if (node instanceof Map) {
+        if (node.size === 0) {
+          result.push({
+            id: currentKeys.join('|'),
+            path: formatPath(currentKeys),
+            keys: currentKeys,
+            value: {}
+          });
+        } else {
+          for (const [key, value] of node) {
+            traverse(value, [...currentKeys, key]);
+          }
+        }
+      } else if (node && typeof node === 'object' && !Array.isArray(node)) {
+        // Fallback for plain objects
         const keys = Object.keys(node);
         if (keys.length === 0) {
           result.push({
@@ -103,9 +120,33 @@ const workerCode = `
     return { added, modified, removed };
   }
 
+  function deepClone(obj) {
+    if (obj === null || typeof obj !== 'object') {
+      return obj;
+    }
+    
+    if (obj instanceof Map) {
+      const cloned = new Map();
+      for (const [key, value] of obj) {
+        cloned.set(key, deepClone(value));
+      }
+      return cloned;
+    }
+
+    if (Array.isArray(obj)) {
+      return obj.map(item => deepClone(item));
+    }
+    
+    const cloned = {};
+    Object.keys(obj).forEach(key => {
+      cloned[key] = deepClone(obj[key]);
+    });
+    return cloned;
+  }
+
   function addNestedValue(data, pathSegments, value, allowOverwrite) {
     if (pathSegments.length === 0) return data;
-    const newData = JSON.parse(JSON.stringify(data));
+    const newData = deepClone(data);
     let current = newData;
     
     for (let i = 0; i < pathSegments.length; i++) {
@@ -113,21 +154,154 @@ const workerCode = `
       const isLast = i === pathSegments.length - 1;
 
       if (isLast) {
-        // If overwrite is NOT allowed, check existence
-        if (!allowOverwrite && Object.prototype.hasOwnProperty.call(current, key)) {
-          throw new Error('Key already exists: ' + formatPath(pathSegments));
+        if (current instanceof Map) {
+           if (!allowOverwrite && current.has(key)) {
+             throw new Error('Key already exists: ' + formatPath(pathSegments));
+           }
+           current.set(key, value);
+        } else {
+           // Fallback for plain objects
+           if (!allowOverwrite && Object.prototype.hasOwnProperty.call(current, key)) {
+             throw new Error('Key already exists: ' + formatPath(pathSegments));
+           }
+           current[key] = value;
         }
-        current[key] = value;
       } else {
-        if (!Object.prototype.hasOwnProperty.call(current, key)) {
-          current[key] = {};
-        } else if (typeof current[key] !== 'object' || current[key] === null) {
-          throw new Error("Path conflict at '" + key + "': cannot add nested key because it is a value, not an object.");
+        if (current instanceof Map) {
+           if (!current.has(key)) {
+             current.set(key, new Map());
+           } else {
+             const val = current.get(key);
+             if (typeof val !== 'object' || val === null) {
+                throw new Error("Path conflict at '" + key + "': cannot add nested key because it is a value, not an object.");
+             }
+           }
+           current = current.get(key);
+        } else {
+           // Fallback
+           if (!Object.prototype.hasOwnProperty.call(current, key)) {
+             current[key] = new Map(); // Create Map for new nested objects
+           } else if (typeof current[key] !== 'object' || current[key] === null) {
+             throw new Error("Path conflict at '" + key + "': cannot add nested key because it is a value, not an object.");
+           }
+           current = current[key];
         }
-        current = current[key];
       }
     }
     return newData;
+  }
+
+  function parseToMap(text) {
+    let at = 0;
+    const ch = () => text.charAt(at);
+    const next = () => at++;
+    const skipWhite = () => { while (at < text.length && /\\s/.test(ch())) next(); };
+    
+    const parseValue = () => {
+      skipWhite();
+      const c = ch();
+      if (c === '{') return parseObject();
+      if (c === '[') return parseArray();
+      if (c === '"') return parseString();
+      if (c === 't') { at += 4; return true; }
+      if (c === 'f') { at += 5; return false; }
+      if (c === 'n') { at += 4; return null; }
+      return parseNumber();
+    };
+
+    const parseObject = () => {
+      const map = new Map();
+      next(); // '{'
+      skipWhite();
+      if (ch() === '}') { next(); return map; }
+      while (true) {
+        skipWhite();
+        const key = parseString();
+        skipWhite();
+        if (ch() !== ':') throw new Error('Expected : at ' + at);
+        next();
+        const val = parseValue();
+        map.set(key, val);
+        skipWhite();
+        if (ch() === '}') { next(); return map; }
+        if (ch() !== ',') throw new Error('Expected , at ' + at);
+        next();
+      }
+    };
+
+    const parseArray = () => {
+      const arr = [];
+      next(); // '['
+      skipWhite();
+      if (ch() === ']') { next(); return arr; }
+      while (true) {
+        arr.push(parseValue());
+        skipWhite();
+        if (ch() === ']') { next(); return arr; }
+        if (ch() !== ',') throw new Error('Expected , at ' + at);
+        next();
+      }
+    };
+
+    const parseString = () => {
+      const start = at;
+      next(); // '"'
+      while (at < text.length) {
+        if (ch() === '\\\\') {
+           at += 2; 
+        } else if (ch() === '"') {
+           break;
+        } else {
+           next();
+        }
+      }
+      next(); 
+      return JSON.parse(text.substring(start, at));
+    };
+
+    const parseNumber = () => {
+      const start = at;
+      if (ch() === '-') next();
+      while (at < text.length && /[0-9.eE+-]/.test(ch())) next();
+      const numStr = text.substring(start, at);
+      const num = Number(numStr);
+      if (isNaN(num)) throw new Error("Invalid number: " + numStr);
+      return num;
+    };
+    
+    return parseValue();
+  }
+
+  function stringifyMap(data, space = 2) {
+    const indentStr = typeof space === 'number' ? ' '.repeat(space) : (space || '');
+    
+    function stringify(node, depth) {
+      const indent = indentStr.repeat(depth);
+      const nextIndent = indentStr.repeat(depth + 1);
+      
+      if (node instanceof Map) {
+        if (node.size === 0) return '{}';
+        const entries = [];
+        for (const [key, value] of node) {
+          entries.push(nextIndent + JSON.stringify(key) + ': ' + stringify(value, depth + 1));
+        }
+        return '{\\n' + entries.join(',\\n') + '\\n' + indent + '}';
+      }
+      
+      if (Array.isArray(node)) {
+        if (node.length === 0) return '[]';
+        const items = node.map(item => stringify(item, depth + 1));
+        return '[\\n' + items.map(i => nextIndent + i).join(',\\n') + '\\n' + indent + ']';
+      }
+      
+      if (typeof node === 'object' && node !== null) {
+         return JSON.stringify(node);
+      }
+      
+      return JSON.stringify(node);
+    }
+    
+    return stringify(data, 0);
   }
 `;
 

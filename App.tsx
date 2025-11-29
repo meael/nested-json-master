@@ -86,6 +86,9 @@ const App: React.FC = () => {
           // If we were in "Saved" state, modifying data breaks that state
           setIsSavedState(false); 
           break;
+        case 'stringify':
+          handleStringifiedData(result);
+          break;
       }
     };
 
@@ -113,7 +116,7 @@ const App: React.FC = () => {
   }, [data, originalData, postWorkerMessage]);
 
   const handleParsedData = (parsed: any, name: string, handle: any) => {
-    setOriginalData(JSON.parse(JSON.stringify(parsed)));
+    setOriginalData(structuredClone(parsed));
     setData(parsed);
     setFileName(name);
     setFileHandle(handle);
@@ -133,15 +136,8 @@ const App: React.FC = () => {
 
   const loadDemoData = () => {
     try {
-        const parsed = DEMO_DATA;
-        setOriginalData(JSON.parse(JSON.stringify(parsed)));
-        setData(parsed);
-        setFileName("demo_localization.json");
-        setFileHandle(null);
-        setUnsavedPaths(new Set());
-        setIsSavedState(false);
-        setSavedItemsSnapshot([]);
-        setToast({ message: 'Demo data loaded successfully', type: 'success' });
+        const content = JSON.stringify(DEMO_DATA);
+        postWorkerMessage('PARSE', { content, name: "demo_localization.json", handle: null }, 'parse');
     } catch (e) {
         setToast({ message: 'Failed to load demo data', type: 'error' });
     }
@@ -174,17 +170,17 @@ const App: React.FC = () => {
     e.target.value = '';
   };
 
-  const saveFile = async () => {
+  const saveFile = () => {
     if (!data) return;
+    postWorkerMessage('STRINGIFY', data, 'stringify');
+  };
 
+  const handleStringifiedData = async (content: string) => {
     try {
-      const content = JSON.stringify(data, null, 2);
-      
-      const stats = getJsonStats(content);
-      const originalStats = originalData ? getJsonStats(JSON.stringify(originalData)) : stats;
-
-      if (stats.size < originalStats.size * 0.5) {
-        if (!confirm("Warning: The file size has decreased significantly (over 50%). Are you sure you haven't accidentally deleted data?")) {
+      // Safety check based on diffs instead of size (since we can't easily stringify originalData map)
+      const originalCount = flatItems.length - diffStats.added + diffStats.removed;
+      if (originalCount > 0 && diffStats.removed > originalCount * 0.5) {
+        if (!confirm("Warning: You have removed more than 50% of the keys. Are you sure?")) {
             return;
         }
       }
@@ -205,14 +201,13 @@ const App: React.FC = () => {
 
       // Success Logic
       setToast({ message: 'File saved successfully!', type: 'success' });
-      setOriginalData(JSON.parse(JSON.stringify(data)));
+      setOriginalData(structuredClone(data));
       
       // Transition to Saved State
-      // We snapshot the current unsaved items to keep displaying them in the gray block
       const currentPendingItems = flatItems.filter(item => unsavedPaths.has(item.path));
       setSavedItemsSnapshot(currentPendingItems);
       setIsSavedState(true);
-      setUnsavedPaths(new Set()); // Clear active unsaved paths tracking
+      setUnsavedPaths(new Set()); 
 
     } catch (e) {
       setToast({ message: 'Failed to save file', type: 'error' });
@@ -253,7 +248,7 @@ const App: React.FC = () => {
   const handleResetChanges = () => {
       if(!originalData) return;
       if(confirm("Are you sure you want to discard all pending changes?")) {
-          setData(JSON.parse(JSON.stringify(originalData)));
+          setData(structuredClone(originalData));
           setUnsavedPaths(new Set());
           setIsSavedState(false);
           setSavedItemsSnapshot([]);
