@@ -17,9 +17,12 @@ const EditorPanel: React.FC<EditorPanelProps> = ({ onOpenAddModal, onSearch, onF
     onSearch(q);
     
     // Auto-detect format from search query and update display
+    // Only if it looks like a path (not regular text)
     if (q.trim() && onFormatChange) {
       const detectedFormat = detectPathFormat(q);
-      onFormatChange(detectedFormat);
+      if (detectedFormat) {
+        onFormatChange(detectedFormat);
+      }
     }
   };
 

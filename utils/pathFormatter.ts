@@ -26,9 +26,10 @@ const needsEscaping = (key: string): boolean => {
 
 /**
  * Detects the path format from a path string
+ * Returns null if the string doesn't look like a path
  */
-export const detectPathFormat = (pathString: string): PathFormat => {
-  if (!pathString || pathString.trim() === '') return 'colon';
+export const detectPathFormat = (pathString: string): PathFormat | null => {
+  if (!pathString || pathString.trim() === '') return null;
   
   const trimmed = pathString.trim();
   
@@ -44,16 +45,31 @@ export const detectPathFormat = (pathString: string): PathFormat => {
   // Arrow only: contains -> but no :
   if (trimmed.includes('->') && !trimmed.includes(':')) return 'arrow';
   
-  // Dot notation: contains . but not in brackets
-  // Check if it has dots outside of brackets
+  // Dot notation: contains . AND looks like a path (alphanumeric segments)
+  // Avoid matching URLs, emails, or random text with dots
   const withoutBrackets = trimmed.replace(/\[.*?\]/g, '');
-  if (withoutBrackets.includes('.')) return 'dot';
+  if (withoutBrackets.includes('.')) {
+    // Check if it looks like a path: segments separated by dots, mostly alphanumeric/underscore
+    // Reject if it has spaces, @, /, http, etc (common in non-path text)
+    if (/\s|@|\/\/|http|www/.test(trimmed)) {
+      return null; // Likely not a path
+    }
+    
+    // Check if segments look like keys (start with letter or underscore)
+    const segments = withoutBrackets.split('.');
+    const looksLikePath = segments.every(seg => 
+      seg.length > 0 && /^[a-zA-Z_]/.test(seg)
+    );
+    
+    if (looksLikePath) {
+      // Lodash: only contains dots and alphanumeric (no special chars)
+      if (/^[a-zA-Z0-9_.]+$/.test(trimmed)) return 'lodash';
+      return 'dot';
+    }
+  }
   
-  // Lodash: only contains dots and alphanumeric (no special chars)
-  if (/^[a-zA-Z0-9_.]+$/.test(trimmed) && trimmed.includes('.')) return 'lodash';
-  
-  // Default to colon format
-  return 'colon';
+  // Doesn't look like a path
+  return null;
 };
 
 /**
