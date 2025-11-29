@@ -10,6 +10,7 @@ import { FileSystemFileHandle, DiffStats, FlatEntry } from './types';
 import { DEMO_DATA } from './demoData';
 import { createWorker } from './utils/worker';
 import { parsePath, formatPath } from './utils/pathFormat';
+import { saveFileHandle, getFileHandle } from './utils/storage';
 
 const App: React.FC = () => {
   const [originalData, setOriginalData] = useState<any | null>(null);
@@ -44,6 +45,30 @@ const App: React.FC = () => {
   // Init Worker
   useEffect(() => {
     workerRef.current = createWorker();
+    
+    // Try to restore last opened file
+    const restoreFile = async () => {
+        const handle = await getFileHandle();
+        if (handle) {
+            // We have a handle, but we need to verify permission or at least try to read it.
+            // Often browsers require a gesture for requestPermission, so we might just try to load it.
+            // If it fails, we might need to prompt the user.
+            try {
+                const file = await handle.getFile();
+                const content = await file.text();
+                handleFileLoad(content, file.name, handle);
+                setToast({ message: `Restored ${file.name}`, type: 'success' });
+            } catch (err) {
+                console.warn("Failed to restore file handle:", err);
+                // If we fail (likely permission), we can't easily prompt without a gesture.
+                // We could show a "Restore Previous Session" button, but for now let's just fail silently
+                // or maybe show a toast "Could not restore last file".
+                // Actually, let's just clear it if it's invalid? No, better to keep it.
+            }
+        }
+    };
+    restoreFile();
+
     return () => {
       workerRef.current?.terminate();
     };
@@ -79,6 +104,7 @@ const App: React.FC = () => {
     
     // Check initial permission status if handle exists
     if (handle) {
+        saveFileHandle(handle); // Save to IndexedDB
         handle.queryPermission({ mode: 'readwrite' }).then((status: 'granted' | 'prompt' | 'denied') => {
             setPermissionStatus(status);
         });

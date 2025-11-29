@@ -105,7 +105,7 @@ const RowItem: React.FC<{ item: FlatEntry; isHighlighted?: boolean }> = ({ item,
 
   return (
     <div 
-      className={`group bg-white border rounded-lg p-3 hover:border-indigo-300 hover:shadow-sm transition duration-200 flex flex-col sm:flex-row sm:items-start justify-between gap-2 h-[66px] mb-[4px] overflow-hidden ${
+      className={`group bg-white border rounded-lg p-3 hover:border-indigo-300 hover:shadow-sm transition duration-200 flex flex-col sm:flex-row sm:items-start justify-between gap-2 min-h-[90px] mb-[4px] ${
         isHighlighted ? 'border-emerald-400 bg-emerald-50/40 ring-1 ring-emerald-200' : 'border-gray-200'
       }`}
     >
@@ -138,17 +138,18 @@ const RowItem: React.FC<{ item: FlatEntry; isHighlighted?: boolean }> = ({ item,
           isHighlighted ? 'bg-white border-emerald-100' : 'bg-gray-50 border-gray-100'
       }`}>
           <div 
-            className="font-mono text-sm text-slate-800 flex-1 text-right"
+            className="font-mono text-sm text-slate-800 flex-1 text-right cursor-pointer hover:text-indigo-600 transition-colors"
             style={{ 
                 display: '-webkit-box',
                 WebkitLineClamp: 2,
-                WebkitBoxOrient: 'vertical',
+                WebkitBoxOrient: 'vertical' as any,
                 overflow: 'hidden',
                 textOverflow: 'ellipsis',
                 wordBreak: 'break-word',
-                whiteSpace: 'pre-wrap'
+                whiteSpace: 'pre-line'
             }}
-            title={displayValue}
+            title="Click to copy value"
+            onClick={() => copyText(displayValue, false)}
           >
             {typeof item.value === 'object' ? <span className="text-gray-400 italic">Object/Array</span> : String(item.value)}
           </div>
