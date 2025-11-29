@@ -1,6 +1,6 @@
 
 import React, { useState, useRef, useEffect, useCallback } from 'react';
-import { UploadCloud, Save, FileJson, Info, RefreshCw, FileText, AlertOctagon, RotateCcw, Copy, Pencil, X, CheckCircle2 } from 'lucide-react';
+import { UploadCloud, Save, FileJson, Info, RefreshCw, FileText, AlertOctagon, RotateCcw, Copy, Pencil, X, CheckCircle2, Lock, LockOpen, Download } from 'lucide-react';
 import JsonListView from './components/JsonListView';
 import EditorPanel from './components/EditorPanel';
 import AddKeyModal from './components/AddKeyModal';
@@ -43,55 +43,6 @@ const App: React.FC = () => {
   // Init Worker
   useEffect(() => {
     workerRef.current = createWorker();
-    
-    workerRef.current.onmessage = (e) => {
-      const { type, result, error, id } = e.data;
-      
-      setIsProcessing(false);
-
-      if (type === 'ERROR') {
-        if (id === 'addValue') {
-            // Pass error to modal instead of toast
-            setAddKeyError(error);
-        } else {
-            setToast({ message: error, type: 'error' });
-        }
-        return;
-      }
-
-      switch (id) {
-        case 'flatten':
-          setFlatItems(result);
-          break;
-        case 'diff':
-          setDiffStats(result);
-          break;
-        case 'parse':
-          handleParsedData(result.data, result.name, result.handle);
-          break;
-        case 'addValue':
-          // Result contains { data, addedPath, addedValue }
-          setData(result.data);
-          // Only update unsaved paths if successful
-          const newPathStr = formatPath(result.addedPath);
-          setUnsavedPaths(prev => {
-            const next = new Set(prev);
-            next.add(newPathStr);
-            return next;
-          });
-          // Clear any errors and close modal
-          setAddKeyError(null);
-          setIsModalOpen(false);
-          setEditingItem(null);
-          // If we were in "Saved" state, modifying data breaks that state
-          setIsSavedState(false); 
-          break;
-        case 'stringify':
-          handleStringifiedData(result);
-          break;
-      }
-    };
-
     return () => {
       workerRef.current?.terminate();
     };
@@ -148,18 +99,64 @@ const App: React.FC = () => {
         if (window.self !== window.top) throw new Error("Iframe context");
         
         if ('showOpenFilePicker' in window) {
-            const [handle] = await (window as any).showOpenFilePicker({
-            types: [{ description: 'JSON Files', accept: { 'application/json': ['.json'] } }],
-            });
-            const file = await handle.getFile();
-            const content = await file.text();
-            handleFileLoad(content, file.name, handle);
+            try {
+                const [handle] = await (window as any).showOpenFilePicker({
+                    types: [{ description: 'JSON Files', accept: { 'application/json': ['.json'] } }],
+                });
+                const file = await handle.getFile();
+                const content = await file.text();
+                handleFileLoad(content, file.name, handle);
+            } catch (pickerErr: any) {
+                // If user cancelled, do nothing
+                if (pickerErr.name === 'AbortError') return;
+                throw pickerErr; // Re-throw other errors to fall back
+            }
         } else {
             throw new Error("API not supported");
         }
     } catch (err) {
+      // Fallback to legacy input
+      console.warn("Falling back to legacy file input", err);
+      setToast({ 
+          message: 'Direct editing not supported. Opening in Read-Only mode.', 
+          type: 'error' 
+      });
       fileInputRef.current?.click();
     }
+  };
+
+  const handleDrop = async (e: React.DragEvent) => {
+      e.preventDefault();
+      e.stopPropagation();
+
+      const item = e.dataTransfer.items[0];
+      if (!item) return;
+
+      try {
+          // Try modern API first
+          if ('getAsFileSystemHandle' in item) {
+              const handle = await (item as any).getAsFileSystemHandle();
+              if (handle && handle.kind === 'file') {
+                  const file = await handle.getFile();
+                  const content = await file.text();
+                  handleFileLoad(content, file.name, handle);
+                  return;
+              }
+          }
+      } catch (err) {
+          console.warn("FileSystemAccess API failed for drop, falling back", err);
+      }
+
+      // Fallback to standard file drop
+      const file = e.dataTransfer.files[0];
+      if (file) {
+          const content = await file.text();
+          handleFileLoad(content, file.name, null);
+          setToast({ 
+              message: 'Opened in Read-Only mode (Drag & Drop)', 
+              type: 'error' 
+          });
+      }
   };
 
   const handleLegacyUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -190,6 +187,11 @@ const App: React.FC = () => {
         await writable.write(content);
         await writable.close();
       } else {
+        // Read-Only mode confirmation
+        if (!confirm("This file is in Read-Only mode. Download changes as a new file?")) {
+            return;
+        }
+
         const blob = new Blob([content], { type: 'application/json' });
         const url = URL.createObjectURL(blob);
         const a = document.createElement('a');
@@ -287,13 +289,64 @@ const App: React.FC = () => {
 
   const showPendingBlock = pendingBlockItems.length > 0;
 
+  // Update Worker Handler when state changes
+  useEffect(() => {
+      if (!workerRef.current) return;
+
+      workerRef.current.onmessage = (e) => {
+        const { type, result, error, id } = e.data;
+        
+        setIsProcessing(false);
+  
+        if (type === 'ERROR') {
+          if (id === 'addValue') {
+              // Pass error to modal instead of toast
+              setAddKeyError(error);
+          } else {
+              setToast({ message: error, type: 'error' });
+          }
+          return;
+        }
+  
+        switch (id) {
+          case 'flatten':
+            setFlatItems(result);
+            break;
+          case 'diff':
+            setDiffStats(result);
+            break;
+          case 'parse':
+            handleParsedData(result.data, result.name, result.handle);
+            break;
+          case 'addValue':
+            // Result contains { data, addedPath, addedValue }
+            setData(result.data);
+            // Only update unsaved paths if successful
+            const newPathStr = formatPath(result.addedPath);
+            setUnsavedPaths(prev => {
+              const next = new Set(prev);
+              next.add(newPathStr);
+              return next;
+            });
+            // Clear any errors and close modal
+            setAddKeyError(null);
+            setIsModalOpen(false);
+            setEditingItem(null);
+            // If we were in "Saved" state, modifying data breaks that state
+            setIsSavedState(false); 
+            break;
+          case 'stringify':
+            handleStringifiedData(result);
+            break;
+        }
+      };
+  }, [handleParsedData, handleStringifiedData]);
+
   return (
     <div 
         className="min-h-screen flex flex-col font-sans text-slate-800 bg-gray-50"
-        onDragOver={(e) => e.preventDefault()}
-        onDrop={(e) => {
-            e.preventDefault();
-        }}
+        onDragOver={(e) => { e.preventDefault(); e.stopPropagation(); }}
+        onDrop={handleDrop}
     >
       {/* Toast Notification */}
       {toast && <Toast message={toast.message} type={toast.type} onClose={() => setToast(null)} />}
@@ -321,7 +374,22 @@ const App: React.FC = () => {
                 <h1 className="text-xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-indigo-600 to-purple-600 tracking-tight">
                 Nested JSON Master
                 </h1>
-                {fileName && <p className="text-xs text-gray-400 font-medium">{fileName}</p>}
+                {fileName && (
+                    <div className="flex items-center gap-2 mt-0.5">
+                        <p className="text-xs text-gray-500 font-medium">{fileName}</p>
+                        {fileHandle ? (
+                            <span className="flex items-center gap-1 text-[10px] font-bold text-emerald-600 bg-emerald-50 px-1.5 py-0.5 rounded border border-emerald-100" title="Changes will be saved directly to the file">
+                                <LockOpen size={10} />
+                                EDITABLE
+                            </span>
+                        ) : (
+                            <span className="flex items-center gap-1 text-[10px] font-bold text-amber-600 bg-amber-50 px-1.5 py-0.5 rounded border border-amber-100" title="Read-Only: Changes will be downloaded as a new file">
+                                <Lock size={10} />
+                                READ-ONLY
+                            </span>
+                        )}
+                    </div>
+                )}
             </div>
           </div>
           
@@ -446,10 +514,15 @@ const App: React.FC = () => {
 
                                     <button 
                                         onClick={saveFile}
-                                        className="flex items-center justify-center gap-2 px-6 py-2.5 text-sm font-bold text-white bg-emerald-600 rounded-lg hover:bg-emerald-700 shadow-sm hover:shadow-md transition active:scale-95 flex-1 sm:flex-none"
+                                        className={`flex items-center justify-center gap-2 px-6 py-2.5 text-sm font-bold text-white rounded-lg shadow-sm hover:shadow-md transition active:scale-95 flex-1 sm:flex-none ${
+                                            fileHandle 
+                                            ? 'bg-emerald-600 hover:bg-emerald-700' 
+                                            : 'bg-amber-600 hover:bg-amber-700'
+                                        }`}
+                                        title={fileHandle ? "Save changes to file" : "Download changes as new file"}
                                     >
-                                        <Save size={18} />
-                                        Save
+                                        {fileHandle ? <Save size={18} /> : <Download size={18} />}
+                                        {fileHandle ? "Save" : "Download"}
                                     </button>
                                 </>
                             )}
