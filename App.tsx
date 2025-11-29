@@ -18,6 +18,7 @@ const App: React.FC = () => {
   
   const [fileHandle, setFileHandle] = useState<FileSystemFileHandle | null>(null);
   const [fileName, setFileName] = useState<string | null>(null);
+  const [permissionStatus, setPermissionStatus] = useState<'granted' | 'prompt' | 'denied' | null>(null);
   
   const [diffStats, setDiffStats] = useState<DiffStats>({ added: 0, removed: 0, modified: 0 });
   const [unsavedPaths, setUnsavedPaths] = useState<Set<string>>(new Set());
@@ -75,6 +76,15 @@ const App: React.FC = () => {
     setIsSavedState(false);
     setSavedItemsSnapshot([]);
     setToast({ message: 'File loaded successfully', type: 'success' });
+    
+    // Check initial permission status if handle exists
+    if (handle) {
+        handle.queryPermission({ mode: 'readwrite' }).then((status: 'granted' | 'prompt' | 'denied') => {
+            setPermissionStatus(status);
+        });
+    } else {
+        setPermissionStatus(null);
+    }
   };
 
   const handleFileLoad = async (content: string, name: string, handle: FileSystemFileHandle | null) => {
@@ -167,7 +177,27 @@ const App: React.FC = () => {
     e.target.value = '';
   };
 
-  const saveFile = () => {
+  const verifyPermission = async (handle: FileSystemFileHandle, withWrite = true) => {
+    const opts = { mode: withWrite ? 'readwrite' : 'read' } as any;
+    
+    // Check if permission was already granted. If so, return true.
+    if ((await handle.queryPermission(opts)) === 'granted') {
+      setPermissionStatus('granted');
+      return true;
+    }
+
+    // Request permission. If the user grants permission, return true.
+    if ((await handle.requestPermission(opts)) === 'granted') {
+      setPermissionStatus('granted');
+      return true;
+    }
+
+    // The user didn't grant permission, so return false.
+    setPermissionStatus('denied');
+    return false;
+  };
+
+  const saveFile = async () => {
     if (!data) return;
     postWorkerMessage('STRINGIFY', data, 'stringify');
   };
@@ -183,23 +213,46 @@ const App: React.FC = () => {
       }
 
       if (fileHandle) {
-        const writable = await fileHandle.createWritable();
-        await writable.write(content);
-        await writable.close();
-      } else {
-        // Read-Only mode confirmation
-        if (!confirm("This file is in Read-Only mode. Download changes as a new file?")) {
+        // Verify/Request permission before writing
+        const hasPermission = await verifyPermission(fileHandle, true);
+        if (!hasPermission) {
+             setToast({ message: 'Write permission denied. Saving as new file.', type: 'error' });
+             // Fallthrough to download logic? Or just return?
+             // User requested explicit save, so maybe we should confirm download if permission denied?
+             if (!confirm("Permission denied. Download changes as a new file?")) {
+                return;
+             }
+             // Fallthrough to download
+        } else {
+            const writable = await fileHandle.createWritable();
+            await writable.write(content);
+            await writable.close();
+            // Success Logic
+            setToast({ message: 'File saved successfully!', type: 'success' });
+            setOriginalData(structuredClone(data));
+            
+            // Transition to Saved State
+            const currentPendingItems = flatItems.filter(item => unsavedPaths.has(item.path));
+            setSavedItemsSnapshot(currentPendingItems);
+            setIsSavedState(true);
+            setUnsavedPaths(new Set()); 
             return;
         }
+      } 
+      
+      // Fallback or Read-Only mode
+      if (!fileHandle && !confirm("This file is in Read-Only mode. Download changes as a new file?")) {
+            return;
+      }
 
-        const blob = new Blob([content], { type: 'application/json' });
+      const blob = new Blob([content], { type: 'application/json' });
         const url = URL.createObjectURL(blob);
         const a = document.createElement('a');
         a.href = url;
         a.download = fileName || 'edited_data.json';
         a.click();
         URL.revokeObjectURL(url);
-      }
+
 
       // Success Logic
       setToast({ message: 'File saved successfully!', type: 'success' });
@@ -378,9 +431,13 @@ const App: React.FC = () => {
                     <div className="flex items-center gap-2 mt-0.5">
                         <p className="text-xs text-gray-500 font-medium">{fileName}</p>
                         {fileHandle ? (
-                            <span className="flex items-center gap-1 text-[10px] font-bold text-emerald-600 bg-emerald-50 px-1.5 py-0.5 rounded border border-emerald-100" title="Changes will be saved directly to the file">
+                            <span className={`flex items-center gap-1 text-[10px] font-bold px-1.5 py-0.5 rounded border ${
+                                permissionStatus === 'granted' 
+                                ? 'text-emerald-600 bg-emerald-50 border-emerald-100' 
+                                : 'text-amber-600 bg-amber-50 border-amber-100'
+                            }`} title={permissionStatus === 'granted' ? "Changes will be saved directly to the file" : "Write permission needed (click Save to request)"}>
                                 <LockOpen size={10} />
-                                EDITABLE
+                                {permissionStatus === 'granted' ? 'EDITABLE' : 'EDITABLE (NEEDS PERMISSION)'}
                             </span>
                         ) : (
                             <span className="flex items-center gap-1 text-[10px] font-bold text-amber-600 bg-amber-50 px-1.5 py-0.5 rounded border border-amber-100" title="Read-Only: Changes will be downloaded as a new file">
