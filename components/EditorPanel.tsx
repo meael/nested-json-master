@@ -1,18 +1,26 @@
 import React, { useState } from 'react';
 import { Plus, Search } from 'lucide-react';
+import { detectPathFormat, PathFormat } from '../utils/pathFormatter';
 
 interface EditorPanelProps {
   onOpenAddModal: () => void;
   onSearch: (query: string) => void;
+  onFormatChange?: (format: PathFormat) => void;
 }
 
-const EditorPanel: React.FC<EditorPanelProps> = ({ onOpenAddModal, onSearch }) => {
+const EditorPanel: React.FC<EditorPanelProps> = ({ onOpenAddModal, onSearch, onFormatChange }) => {
   const [searchQuery, setSearchQuery] = useState('');
 
   const handleSearchChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const q = e.target.value;
     setSearchQuery(q);
     onSearch(q);
+    
+    // Auto-detect format from search query and update display
+    if (q.trim() && onFormatChange) {
+      const detectedFormat = detectPathFormat(q);
+      onFormatChange(detectedFormat);
+    }
   };
 
   return (

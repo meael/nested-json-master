@@ -11,6 +11,7 @@ import { DEMO_DATA } from './demoData';
 import { createWorker } from './utils/worker';
 import { parsePath, formatPath } from './utils/pathFormat';
 import { saveFileHandle, getFileHandle } from './utils/storage';
+import { PathFormat, detectPathFormat, PATH_FORMAT_LABELS } from './utils/pathFormatter';
 
 const App: React.FC = () => {
   const [originalData, setOriginalData] = useState<any | null>(null);
@@ -38,6 +39,9 @@ const App: React.FC = () => {
   
   const [searchQuery, setSearchQuery] = useState('');
   const [isProcessing, setIsProcessing] = useState(false);
+  const [pathFormat, setPathFormat] = useState<PathFormat>(() => {
+    return (localStorage.getItem('pathFormat') as PathFormat) || 'colon';
+  });
   
   const fileInputRef = useRef<HTMLInputElement>(null);
   const workerRef = useRef<Worker | null>(null);
@@ -303,6 +307,7 @@ const App: React.FC = () => {
 
     try {
       setAddKeyError(null); // Clear previous errors
+      
       // Auto-detect value type
       let finalValue: any = valueStr;
       if (valueStr.startsWith('{') || valueStr.startsWith('[')) {
@@ -528,6 +533,10 @@ const App: React.FC = () => {
              <EditorPanel 
                  onOpenAddModal={openAddModal}
                  onSearch={(q) => setSearchQuery(q)}
+                 onFormatChange={(format) => {
+                   setPathFormat(format);
+                   localStorage.setItem('pathFormat', format);
+                 }}
              />
 
              {/* Pending Changes / Saved Changes Block */}
@@ -655,10 +664,27 @@ const App: React.FC = () => {
                         {flatItems.length} Keys
                     </span>
                  </h2>
-                 {isProcessing && <RefreshCw size={16} className="animate-spin text-indigo-500"/>}
+                 <div className="flex items-center gap-3">
+                     {isProcessing && <RefreshCw size={16} className="animate-spin text-indigo-500"/>}
+                     <select
+                       value={pathFormat}
+                       onChange={(e) => {
+                         setPathFormat(e.target.value as PathFormat);
+                         localStorage.setItem('pathFormat', e.target.value);
+                       }}
+                       className="px-3 py-2 bg-gray-50 border border-gray-200 rounded-lg text-xs focus:outline-none focus:ring-2 focus:ring-indigo-100 focus:border-indigo-400 transition cursor-pointer"
+                       title="Select path display format"
+                     >
+                       {Object.entries(PATH_FORMAT_LABELS).map(([value, label]) => (
+                         <option key={value} value={value}>
+                           {label}
+                         </option>
+                       ))}
+                     </select>
+                 </div>
              </div>
 
-             <JsonListView items={flatItems} searchQuery={searchQuery} highlightPaths={unsavedPaths} />
+             <JsonListView items={flatItems} searchQuery={searchQuery} highlightPaths={unsavedPaths} pathFormat={pathFormat} />
 
           </div>
         )}

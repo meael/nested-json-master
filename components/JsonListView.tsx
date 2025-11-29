@@ -1,17 +1,19 @@
 import React, { useEffect, useState, useRef } from 'react';
-import { FlatEntry } from '../types';
 import { Copy, Check } from 'lucide-react';
+import { FlatEntry } from '../types';
+import { PathFormat, formatPathAs } from '../utils/pathFormatter';
 
 interface JsonListViewProps {
   items: FlatEntry[];
   searchQuery: string;
   highlightPaths?: Set<string>;
+  pathFormat?: PathFormat;
 }
 
 const ITEM_HEIGHT = 70; // Approximation including margin/border
 const OVERSCAN = 10;
 
-const JsonListView: React.FC<JsonListViewProps> = ({ items, searchQuery, highlightPaths }) => {
+const JsonListView: React.FC<JsonListViewProps> = ({ items, searchQuery = '', highlightPaths, pathFormat }) => {
   const [filteredItems, setFilteredItems] = useState<FlatEntry[]>([]);
   const [scrollTop, setScrollTop] = useState(0);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -24,9 +26,18 @@ const JsonListView: React.FC<JsonListViewProps> = ({ items, searchQuery, highlig
     }
     const query = searchQuery.toLowerCase();
     const result = items.filter(item => {
+      // Check original path format
       const pathMatch = item.path.toLowerCase().includes(query);
+      
+      // Also check all possible formatted versions
+      const formats: PathFormat[] = ['colon', 'bracket', 'dot', 'arrow', 'jsonpath', 'lodash'];
+      const formattedPathMatch = formats.some(format => {
+        const formatted = formatPathAs(item.keys, format).toLowerCase();
+        return formatted.includes(query);
+      });
+      
       const valueMatch = String(item.value).toLowerCase().includes(query);
-      return pathMatch || valueMatch;
+      return pathMatch || formattedPathMatch || valueMatch;
     });
     setFilteredItems(result);
   }, [items, searchQuery]);
@@ -76,9 +87,10 @@ const JsonListView: React.FC<JsonListViewProps> = ({ items, searchQuery, highlig
       >
         {visibleItems.map((item, index) => (
           <RowItem 
-            key={`${item.id}-${startIndex + index}`} 
+            key={item.id} 
             item={item} 
-            isHighlighted={highlightPaths?.has(item.path)} 
+            isHighlighted={highlightPaths?.has(item.path)}
+            pathFormat={pathFormat}
           />
         ))}
       </div>
@@ -86,9 +98,11 @@ const JsonListView: React.FC<JsonListViewProps> = ({ items, searchQuery, highlig
   );
 };
 
-const RowItem: React.FC<{ item: FlatEntry; isHighlighted?: boolean }> = ({ item, isHighlighted }) => {
+const RowItem: React.FC<{ item: FlatEntry; isHighlighted?: boolean; pathFormat: PathFormat }> = ({ item, isHighlighted, pathFormat }) => {
   const [copiedKey, setCopiedKey] = useState(false);
   const [copiedVal, setCopiedVal] = useState(false);
+
+  const displayPath = formatPathAs(item.keys, pathFormat);
 
   const copyText = (text: string, isKey: boolean) => {
     navigator.clipboard.writeText(text);
@@ -118,13 +132,13 @@ const RowItem: React.FC<{ item: FlatEntry; isHighlighted?: boolean }> = ({ item,
                     ? 'text-emerald-800 bg-emerald-100 hover:bg-emerald-200' 
                     : 'text-indigo-700 bg-indigo-50 hover:bg-indigo-100'
                 }`}
-                onClick={() => copyText(item.path, true)}
+                onClick={() => copyText(displayPath, true)}
                 title="Click to copy key path"
             >
-                {item.path}
+                {displayPath}
             </div>
             <button 
-                onClick={(e) => { e.stopPropagation(); copyText(item.path, true); }}
+                onClick={(e) => { e.stopPropagation(); copyText(displayPath, true); }}
                 className="text-gray-300 hover:text-indigo-600 transition opacity-0 group-hover:opacity-100"
                 title="Copy Path"
             >
