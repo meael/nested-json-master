@@ -308,13 +308,12 @@ const App: React.FC = () => {
     try {
       setAddKeyError(null); // Clear previous errors
       
-      // Auto-detect value type
+      // Parse JSON objects/arrays, otherwise keep as string
       let finalValue: any = valueStr;
       if (valueStr.startsWith('{') || valueStr.startsWith('[')) {
         try { finalValue = JSON.parse(valueStr); } catch {}
-      } else if (valueStr === 'true') finalValue = true;
-      else if (valueStr === 'false') finalValue = false;
-      else if (!isNaN(Number(valueStr)) && valueStr.trim() !== '') finalValue = Number(valueStr);
+      }
+      // All other values remain as strings
 
       const pathSegments = parsePath(pathStr);
       
