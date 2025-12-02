@@ -119,7 +119,7 @@ const AddKeyModal: React.FC<AddKeyModalProps> = ({
               readOnly={mode === 'edit'} // Usually we don't rename keys in "Edit Value" mode, but could be changed if needed
               type="text"
               value={pathInput}
-              onChange={(e) => setPathInput(e.target.value.replace(/\s/g, ''))}
+              onChange={(e) => setPathInput(e.target.value.replace(/[^a-zA-Z:.\->]/g, ''))}
               placeholder="banking:taxPayment->newKey"
               className={`w-full px-4 py-2.5 border rounded-lg focus:ring-2 outline-none transition font-mono text-sm ${displayError && !pathInput.trim() ? 'border-red-300 focus:ring-red-200' : 'border-gray-300 focus:ring-indigo-500'
                 } ${mode === 'edit' ? 'bg-gray-100 text-gray-500 cursor-not-allowed' : 'bg-white'}`}
