@@ -126,7 +126,7 @@ const RowItem: React.FC<{ item: FlatEntry; isHighlighted?: boolean; pathFormat: 
         {/* Path String */}
         <div className="flex items-center gap-2">
           <div
-            className={`text-xs font-mono px-2 py-1 rounded truncate select-all cursor-pointer transition ${isHighlighted
+            className={`text-xs font-mono px-2 py-1 rounded truncate select-none cursor-pointer transition ${isHighlighted
               ? 'text-emerald-800 bg-emerald-100 hover:bg-emerald-200'
               : 'text-indigo-700 bg-indigo-50 hover:bg-indigo-100'
               }`}

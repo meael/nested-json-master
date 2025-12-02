@@ -13,11 +13,11 @@ interface AddKeyModalProps {
   mode?: 'add' | 'edit';
 }
 
-const AddKeyModal: React.FC<AddKeyModalProps> = ({ 
-  isOpen, 
-  onClose, 
-  onAdd, 
-  isProcessing, 
+const AddKeyModal: React.FC<AddKeyModalProps> = ({
+  isOpen,
+  onClose,
+  onAdd,
+  isProcessing,
   externalError,
   initialPath = '',
   initialValue = '',
@@ -38,6 +38,20 @@ const AddKeyModal: React.FC<AddKeyModalProps> = ({
       setLocalError(null);
     }
   }, [isOpen, initialPath, initialValue]);
+
+  // Handle ESC key to close modal
+  useEffect(() => {
+    if (!isOpen) return;
+
+    const handleEscape = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        onClose();
+      }
+    };
+
+    window.addEventListener('keydown', handleEscape);
+    return () => window.removeEventListener('keydown', handleEscape);
+  }, [isOpen, onClose]);
 
   useEffect(() => {
     setParsedPath(parsePath(pathInput));
@@ -62,7 +76,7 @@ const AddKeyModal: React.FC<AddKeyModalProps> = ({
       setLocalError('Value is required');
       return;
     }
-    
+
     // In edit mode, we allow overwrite
     onAdd(pathInput, valueInput, mode === 'edit');
   };
@@ -73,15 +87,15 @@ const AddKeyModal: React.FC<AddKeyModalProps> = ({
   const displayError = localError || externalError;
 
   return (
-    <div 
-        className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm animate-fade-in"
-        onClick={onClose}
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm animate-fade-in"
+      onClick={onClose}
     >
-      <div 
+      <div
         className="bg-white rounded-xl shadow-2xl w-full max-w-lg overflow-hidden transform transition-all scale-100"
         onClick={(e) => e.stopPropagation()}
       >
-        
+
         {/* Header */}
         <div className="px-6 py-4 border-b border-gray-100 flex items-center justify-between bg-gray-50">
           <h2 className="text-lg font-bold text-slate-800">
@@ -94,7 +108,7 @@ const AddKeyModal: React.FC<AddKeyModalProps> = ({
 
         {/* Form */}
         <form onSubmit={handleSubmit} className="p-6 flex flex-col gap-5">
-          
+
           {/* Path Input */}
           <div className="flex flex-col gap-2">
             <label className="text-sm font-semibold text-slate-700">
@@ -105,11 +119,10 @@ const AddKeyModal: React.FC<AddKeyModalProps> = ({
               readOnly={mode === 'edit'} // Usually we don't rename keys in "Edit Value" mode, but could be changed if needed
               type="text"
               value={pathInput}
-              onChange={(e) => setPathInput(e.target.value)}
+              onChange={(e) => setPathInput(e.target.value.replace(/\s/g, ''))}
               placeholder="banking:taxPayment->newKey"
-              className={`w-full px-4 py-2.5 border rounded-lg focus:ring-2 outline-none transition font-mono text-sm ${
-                displayError && !pathInput.trim() ? 'border-red-300 focus:ring-red-200' : 'border-gray-300 focus:ring-indigo-500'
-              } ${mode === 'edit' ? 'bg-gray-100 text-gray-500 cursor-not-allowed' : 'bg-white'}`}
+              className={`w-full px-4 py-2.5 border rounded-lg focus:ring-2 outline-none transition font-mono text-sm ${displayError && !pathInput.trim() ? 'border-red-300 focus:ring-red-200' : 'border-gray-300 focus:ring-indigo-500'
+                } ${mode === 'edit' ? 'bg-gray-100 text-gray-500 cursor-not-allowed' : 'bg-white'}`}
             />
             {/* Preview */}
             {parsedPath.length > 0 && (
@@ -136,9 +149,8 @@ const AddKeyModal: React.FC<AddKeyModalProps> = ({
               onChange={(e) => setValueInput(e.target.value)}
               placeholder="Enter translation string or value..."
               rows={6}
-              className={`w-full px-4 py-2.5 border rounded-lg focus:ring-2 outline-none transition text-sm resize-none whitespace-pre-wrap font-mono ${
-                displayError ? 'border-red-300 focus:ring-red-200' : 'border-gray-300 focus:ring-indigo-500'
-              }`}
+              className={`w-full px-4 py-2.5 border rounded-lg focus:ring-2 outline-none transition text-sm resize-none whitespace-pre-wrap font-mono ${displayError ? 'border-red-300 focus:ring-red-200' : 'border-gray-300 focus:ring-indigo-500'
+                }`}
             />
           </div>
 
